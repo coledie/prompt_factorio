@@ -8,6 +8,10 @@ An experimental [Model Context Protocol](https://www.anthropic.com/news/model-co
 
 Where the upstream project focuses on giving Claude *server-admin* tools (teleport, give items, screenshots, raw Lua), `factorio_npc_mcp` aims to expose tools and prompts that let an LLM act as an **autonomous in-game NPC / agent** — perceiving the world, planning, and taking actions through Factorio's RCON + Lua interface.
 
+## Gameplay
+
+![Gameplay screenshot](gameplay.png)
+
 ## Status
 
 v0 scaffolding present: Factorio mod, RCON-proxy backend, MCP server, install scripts.
