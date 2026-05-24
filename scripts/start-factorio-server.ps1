@@ -51,10 +51,26 @@ write-data=$serverRoot
 Set-Content -LiteralPath $serverCfg -Value $cfgContent -Encoding ASCII
 
 # Junction the mod into the server's mods dir (idempotent).
+# PowerShell 5.1's `New-Item -ItemType Junction` silently creates an empty
+# real directory if the target path doesn't resolve cleanly, which leaves
+# Factorio loading a checksum-0 stub mod. Use cmd's mklink /J instead and
+# tear down any prior empty/broken folder first.
 $modLink = Join-Path $serverMods 'npc_mcp'
+if (Test-Path $modLink) {
+    $item = Get-Item $modLink -Force
+    $isJunction = $item.Attributes.ToString().Contains('ReparsePoint')
+    $linkOk = $isJunction -and (Test-Path (Join-Path $modLink 'info.json'))
+    if (-not $linkOk) {
+        Write-Host "Replacing broken mod link at: $modLink"
+        Remove-Item -LiteralPath $modLink -Recurse -Force
+    }
+}
 if (-not (Test-Path $modLink)) {
     Write-Host "Junctioning mod: $modLink -> $modSource"
-    New-Item -ItemType Junction -Path $modLink -Target $modSource | Out-Null
+    & cmd /c mklink /J "`"$modLink`"" "`"$modSource`"" | Out-Null
+    if (-not (Test-Path (Join-Path $modLink 'info.json'))) {
+        throw "mod junction failed: $modLink has no info.json after mklink"
+    }
 }
 
 # Enable the mod in the server's mod-list.json.

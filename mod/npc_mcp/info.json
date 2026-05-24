@@ -1,0 +1,9 @@
+{
+  "name": "npc_mcp",
+  "version": "0.1.0",
+  "factorio_version": "2.0",
+  "title": "NPC MCP",
+  "author": "factorio_npc_mcp",
+  "description": "Headless agent backend: persistent state + on_tick dispatcher + remote interface for an LLM-controlled detached character (Botty). Driven over RCON by mcp/factorio_npc_mcp.py.",
+  "dependencies": ["base >= 2.0"]
+}

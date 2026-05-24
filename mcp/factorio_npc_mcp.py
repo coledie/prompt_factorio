@@ -1,9 +1,11 @@
 """factorio_npc_mcp — MCP server exposing NPC-control tools to an LLM.
 
 Every tool boils down to a single `remote.call("npc", "<fn>", ...)` shipped
-over RCON via the backend. Responses come back as JSON strings printed with
-`rcon.print(...)` inside the Lua call, and are parsed before returning to
-the LLM.
+over RCON via the backend. Responses come back as JSON strings printed
+with `rcon.print(...)` inside the Lua call, and are parsed before
+returning to the LLM.
+
+See mod/npc_mcp/PLAN.md and mod/npc_mcp/control.lua for the in-game side.
 """
 
 from __future__ import annotations
@@ -17,7 +19,101 @@ from fastmcp import FastMCP
 
 BACKEND_URL = os.environ.get("BACKEND_URL", "http://127.0.0.1:8000")
 
-mcp = FastMCP("Factorio NPC", dependencies=["httpx"])
+# Server-level instructions are sent in the MCP `initialize` response and
+# Claude Desktop folds them into the system context automatically — so the
+# operator briefing is in effect from the first message of every chat that
+# has the `factorio-npc` MCP server enabled. No need to attach the
+# `factorio_briefing` prompt manually each session.
+_BRIEFING = """\
+# Factorio NPC operator briefing (headless edition)
+
+You are driving **Botty**, a detached character on a HEADLESS Factorio
+dedicated server. **No human player is connected** — you are the only
+actor in the world. The mod auto-spawned Botty on server boot. A human
+is watching chat and confirming each non-trivial action.
+
+## What Factorio is (1-minute version)
+
+2D top-down infinite map. Goal: research tech by feeding science packs
+into labs, ultimately launching a rocket. Early game: chop wood,
+hand-mine ore, smelt plates in stone furnaces over coal, craft a burner
+mining drill, then assemblers + labs + red science.
+
+Visible resources: trees (wood), stone, coal (black), iron-ore (blue),
+copper-ore (orange), water (impassable), biters / spitters (enemies).
+
+## Toolset (everything below is implemented)
+
+Perception:
+- **`npc_observe(radius=16)`** — your default. Position + inventory +
+  nearby entities + enemy_count + daytime, one round-trip.
+- `npc_drain_events()` — pull queued events (arrived, craft_done,
+  research_finished, mined_out, died...). Call at start of each turn.
+- `npc_look`, `npc_look_at(x,y,r)`, `npc_inventory`,
+  `npc_screenshot(zoom, width, height)`, `npc_chart(x,y,r)`,
+  `npc_map_summary`, `npc_research_status`, `npc_tech_tree(only_available=True)`.
+
+Movement:
+- `npc_walk_to(x, y)` — async pathfind; emits `arrived`.
+- `npc_walk(direction)`, `npc_stop()`.
+
+Gathering: `npc_mine_at(x, y)` (auto-approaches into reach).
+
+Crafting (simulated, works without a player):
+- `npc_craft(recipe, count)`, `npc_craft_status()`, `npc_cancel_craft(i)`.
+
+Building: `npc_place(item, x, y, dir=0)`, `npc_pickup(x, y)`,
+`npc_rotate(x, y, dir)`, `npc_set_recipe(x, y, recipe)`.
+
+Logistics: `npc_insert_into(x,y,item,n)`, `npc_take_from(x,y,item,n)`,
+`npc_fuel(x,y,fuel="coal",n=5)`.
+
+Research: `npc_research(tech)`.
+
+Combat: `npc_equip(armor, gun, ammo, ammo_count)`, `npc_shoot_at(x, y)`.
+
+Chat / cheats (need approval): `npc_say`, `npc_give`, `npc_save`,
+`npc_despawn`.
+
+## Coordinates & latency
+
+- +x = east, +y = south. Botty walks ~9 tiles/sec.
+- Each tool call is a round-trip; **do not poll mid-walk**. Estimate
+  `eta = distance / 9` seconds, then `npc_drain_events()` to check.
+- One perception call per turn.
+
+## Operating loop
+
+1. **DRAIN.** `npc_drain_events()` — what changed?
+2. **OBSERVE.** `npc_observe(16)`.
+3. **REPORT.** Status / Scene / Proposal block (see below).
+4. **CONFIRM.** Wait for human "go".
+5. **ACT.** Fire the proposed tool calls back-to-back without
+   interleaved observes.
+6. Goto 1 once you expect the leg to be done.
+
+## Output format
+
+> **Status:** Botty at (12, -4), HP 250. Holding 3 wood, 6 iron-ore.
+> **Scene:** Iron patch ~6 east. Coal seam ~10 south. No biters.
+> **Proposal:** walk_to(18, -4) -> mine_at(20, -4) until 20 iron-ore. ETA ~25s.
+
+## Hard rules
+
+- Never `npc_despawn` or `npc_give` without explicit human approval.
+- If `enemy_count > 0` within ~15 tiles, STOP and ask.
+- If a tool returns `{"ok": false, ...}`, surface the error verbatim.
+- Single legs ≤ 30 tiles. No global pathfinding shortcuts.
+
+## First-session checklist
+
+When the human says "hi" / "go" / anything in a fresh chat:
+1. `npc_drain_events()` (probably sees a `spawn` event).
+2. `npc_observe(24)`.
+3. Status / Scene / Proposal → wait for "go".
+"""
+
+mcp = FastMCP("Factorio NPC", dependencies=["httpx"], instructions=_BRIEFING)
 
 
 # ---------- low-level transport -------------------------------------------------
@@ -30,7 +126,7 @@ def _rcon(command: str) -> str:
         f"{BACKEND_URL}/execute_command",
         headers={"X-API-Key": api_key},
         json={"command": command},
-        timeout=10.0,
+        timeout=15.0,
     )
     if r.status_code != 200:
         return json.dumps({"ok": False, "error": f"backend {r.status_code}: {r.text}"})
@@ -58,15 +154,20 @@ def _lua_repr(v: Any) -> str:
     if isinstance(v, (int, float)):
         return repr(v)
     if isinstance(v, str):
-        # crude but sufficient for our identifier-ish args
         return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
     if isinstance(v, dict):
-        parts = [f"{k}={_lua_repr(val)}" for k, val in v.items()]
+        parts = [f"{_lua_key(k)}={_lua_repr(val)}" for k, val in v.items()]
         return "{" + ", ".join(parts) + "}"
+    if isinstance(v, (list, tuple)):
+        return "{" + ", ".join(_lua_repr(x) for x in v) + "}"
     raise TypeError(f"cannot serialise {type(v).__name__} to Lua")
 
 
-# ---------- direction helper ----------------------------------------------------
+def _lua_key(k: Any) -> str:
+    if isinstance(k, str) and k.replace("_", "a").isalnum() and not k[:1].isdigit():
+        return k
+    return "[" + _lua_repr(k) + "]"
+
 
 _DIRECTIONS = {
     # Factorio 2.0 uses 16-way directions; cardinals are 0/4/8/12.
@@ -74,7 +175,9 @@ _DIRECTIONS = {
 }
 
 
-# ---------- tools ---------------------------------------------------------------
+# ============================================================================
+# Lifecycle
+# ============================================================================
 
 @mcp.tool()
 def npc_spawn(
@@ -84,12 +187,8 @@ def npc_spawn(
     dx: float = 3.0,
     dy: float = 0.0,
 ) -> dict:
-    """Spawn the NPC character. Idempotent: returns existing NPC if already spawned.
-
-    If x/y are given, spawn at that absolute position. Otherwise anchor near
-    player 1 (offset by dx, dy), and if no player is connected fall back to
-    the force spawn point on nauvis.
-    """
+    """Spawn Botty. Idempotent. The mod auto-spawns on server boot, so this is
+    mainly for relocating or re-spawning after `npc_despawn`."""
     opts: dict[str, Any] = {"dx": dx, "dy": dy}
     if name:
         opts["name"] = name
@@ -101,40 +200,117 @@ def npc_spawn(
 
 @mcp.tool()
 def npc_despawn() -> dict:
-    """Remove the NPC entity from the world."""
+    """Remove Botty. Requires explicit human approval."""
     return _call("despawn")
 
 
 @mcp.tool()
 def npc_rename(name: str) -> dict:
-    """Change the floating nameplate above the NPC."""
+    """Change Botty's display name."""
     return _call("rename", name)
 
 
 @mcp.tool()
-def npc_status() -> dict:
-    """Lightweight check: does the NPC exist, where is it, what's it doing?
+def npc_save(name: str | None = None) -> dict:
+    """`game.server_save(name)` — snapshot the world."""
+    if name:
+        return _call("save", name)
+    return _call("save")
 
-    Prefer `npc_observe` when you also need surroundings/inventory — one RCON
-    round-trip instead of three.
-    """
+
+# ============================================================================
+# Perception
+# ============================================================================
+
+@mcp.tool()
+def npc_status() -> dict:
+    """Lightweight existence/position/intent check. Prefer `npc_observe`."""
     return _call("status")
 
 
 @mcp.tool()
 def npc_observe(radius: int = 16) -> dict:
-    """Combined perception: status + nearby entities (within `radius` tiles) +
-    inventory, in a single RCON round-trip.
-
-    Use this as your default "look around" call. It also reports
-    `enemy_count` so you can bail early if biters are nearby.
-    """
+    """Default perception: position + inventory + nearby entities + enemy_count.
+    One RCON round-trip; use this instead of chaining status/look/inventory."""
     return _call("observe", radius)
 
 
 @mcp.tool()
+def npc_look(radius: int = 16) -> dict:
+    """Just nearby entities around Botty."""
+    return _call("look", radius)
+
+
+@mcp.tool()
+def npc_look_at(x: float, y: float, radius: int = 16) -> dict:
+    """Perception anchored at an arbitrary point (charted area only)."""
+    return _call("look_at", x, y, radius)
+
+
+@mcp.tool()
+def npc_inventory() -> dict:
+    """Main inventory + armor/guns/ammo/trash."""
+    return _call("inventory")
+
+
+@mcp.tool()
+def npc_drain_events() -> dict:
+    """Consume the in-game event ring buffer. Call at the start of each turn."""
+    return _call("drain_events")
+
+
+@mcp.tool()
+def npc_screenshot(
+    zoom: float = 0.5,
+    width: int = 1024,
+    height: int = 1024,
+    show_entity_info: bool = True,
+    x: float | None = None,
+    y: float | None = None,
+) -> dict:
+    """Render a top-down screenshot. Response includes a URL hint:
+    `http://127.0.0.1:8000/screenshot/{name}`."""
+    opts: dict[str, Any] = {
+        "zoom": zoom,
+        "resolution": [width, height],
+        "show_entity_info": show_entity_info,
+    }
+    if x is not None and y is not None:
+        opts["position"] = {"x": x, "y": y}
+    return _call("screenshot", opts)
+
+
+@mcp.tool()
+def npc_chart(x: float, y: float, radius: int = 64) -> dict:
+    """Reveal an area on the map without moving."""
+    return _call("chart", x, y, radius)
+
+
+@mcp.tool()
+def npc_map_summary() -> dict:
+    """Aggregate of resource patches within ~128 tiles of Botty."""
+    return _call("map_summary")
+
+
+@mcp.tool()
+def npc_research_status() -> dict:
+    """Current research + progress + queue."""
+    return _call("research_status")
+
+
+@mcp.tool()
+def npc_tech_tree(only_available: bool = True) -> dict:
+    """List unresearched techs; `only_available=True` => prereqs met."""
+    return _call("tech_tree", only_available)
+
+
+# ============================================================================
+# Movement
+# ============================================================================
+
+@mcp.tool()
 def npc_walk(direction: str) -> dict:
-    """Start walking continuously in a cardinal direction: 'north' | 'east' | 'south' | 'west'."""
+    """Walk continuously in a cardinal direction until stopped."""
     if direction not in _DIRECTIONS:
         return {"ok": False, "error": f"direction must be one of {list(_DIRECTIONS)}"}
     return _call("walk", _DIRECTIONS[direction])
@@ -142,55 +318,163 @@ def npc_walk(direction: str) -> dict:
 
 @mcp.tool()
 def npc_walk_to(x: float, y: float) -> dict:
-    """Walk toward an absolute world position. Naive straight-line stepping in v0."""
+    """Pathfind and walk to (x, y). Async; emits `arrived` event when done."""
     return _call("walk_to", x, y)
 
 
 @mcp.tool()
-def npc_mine_at(x: float, y: float) -> dict:
-    """Aim the NPC at (x, y) and start mining whatever is there (tree, ore, etc.)."""
-    return _call("mine_at", x, y)
-
-
-@mcp.tool()
 def npc_stop() -> dict:
-    """Cancel any walking / mining intent. NPC becomes idle."""
+    """Cancel current intent (walk / mine / shoot)."""
     return _call("stop")
 
 
+# ============================================================================
+# Gathering
+# ============================================================================
+
+@mcp.tool()
+def npc_mine_at(x: float, y: float) -> dict:
+    """Auto-approach to reach distance, then mine whatever's at (x, y) until gone."""
+    return _call("mine_at", x, y)
+
+
+# ============================================================================
+# Crafting
+# ============================================================================
+
+@mcp.tool()
+def npc_craft(recipe: str, count: int = 1) -> dict:
+    """Queue a hand-craft. Ingredients consumed when each unit starts;
+    product inserted when its timer expires. Emits `craft_done` per unit."""
+    return _call("craft", recipe, count)
+
+
+@mcp.tool()
+def npc_craft_status() -> dict:
+    """Inspect the simulated hand-craft queue."""
+    return _call("craft_status")
+
+
+@mcp.tool()
+def npc_cancel_craft(index: int = 1) -> dict:
+    """Drop a craft queue entry (1 = head). No refund of consumed ingredients."""
+    return _call("cancel_craft", index)
+
+
+# ============================================================================
+# Building
+# ============================================================================
+
+@mcp.tool()
+def npc_place(item: str, x: float, y: float, direction: int = 0) -> dict:
+    """Place a building from inventory. `direction` is 0..15 (Factorio 16-way)."""
+    return _call("place", item, x, y, direction)
+
+
+@mcp.tool()
+def npc_pickup(x: float, y: float) -> dict:
+    """Mine a friendly entity at (x, y) back into Botty's inventory."""
+    return _call("pickup", x, y)
+
+
+@mcp.tool()
+def npc_rotate(x: float, y: float, direction: int) -> dict:
+    """Rotate the entity at (x, y) to a 0..15 direction."""
+    return _call("rotate", x, y, direction)
+
+
+@mcp.tool()
+def npc_set_recipe(x: float, y: float, recipe: str) -> dict:
+    """Set the recipe of the assembling machine at (x, y)."""
+    return _call("set_recipe", x, y, recipe)
+
+
+# ============================================================================
+# Logistics
+# ============================================================================
+
+@mcp.tool()
+def npc_insert_into(x: float, y: float, item: str, count: int = 1) -> dict:
+    """Insert items from Botty into the container/machine at (x, y)."""
+    return _call("insert_into", x, y, item, count)
+
+
+@mcp.tool()
+def npc_take_from(x: float, y: float, item: str, count: int = 1) -> dict:
+    """Take items from the container/machine at (x, y) into Botty."""
+    return _call("take_from", x, y, item, count)
+
+
+@mcp.tool()
+def npc_fuel(x: float, y: float, fuel: str = "coal", count: int = 5) -> dict:
+    """Convenience: stick fuel into the burner at (x, y)."""
+    return _call("fuel", x, y, fuel, count)
+
+
+# ============================================================================
+# Research
+# ============================================================================
+
+@mcp.tool()
+def npc_research(tech: str) -> dict:
+    """Append a tech to the force's research queue."""
+    return _call("research", tech)
+
+
+# ============================================================================
+# Combat
+# ============================================================================
+
+@mcp.tool()
+def npc_equip(
+    armor: str | None = None,
+    gun: str | None = None,
+    ammo: str | None = None,
+    ammo_count: int = 10,
+) -> dict:
+    """Set Botty's armor/gun/ammo. Pass "" to clear a slot."""
+    opts: dict[str, Any] = {}
+    if armor is not None:
+        opts["armor"] = armor or None
+    if gun is not None:
+        opts["gun"] = gun or None
+    if ammo:
+        opts["ammo"] = ammo
+        opts["ammo_count"] = ammo_count
+    return _call("equip", opts)
+
+
+@mcp.tool()
+def npc_shoot_at(x: float, y: float) -> dict:
+    """Shoot toward (x, y) (continuous until `npc_stop`)."""
+    return _call("shoot_at", x, y)
+
+
+# ============================================================================
+# Chat / cheats
+# ============================================================================
+
 @mcp.tool()
 def npc_say(text: str) -> dict:
-    """Print a chat line as the NPC. Visible to all players in-game."""
+    """Print a chat line as Botty."""
     return _call("say", text)
 
 
 @mcp.tool()
-def npc_look(radius: int = 16) -> dict:
-    """Perceive: returns NPC position + nearby entities within `radius` tiles."""
-    return _call("look", radius)
-
-
-@mcp.tool()
-def npc_inventory() -> dict:
-    """Return the NPC's main inventory contents."""
-    return _call("inventory")
-
-
-@mcp.tool()
 def npc_give(item: str, count: int = 1, quality: str | None = None) -> dict:
-    """Dev helper: insert items directly into the NPC's inventory."""
+    """Dev helper: insert items directly. Requires human approval."""
     if quality:
         return _call("give", item, count, quality)
     return _call("give", item, count)
 
 
+# ============================================================================
+# Prompts
+# ============================================================================
+
 @mcp.prompt()
 def factorio_briefing() -> str:
-    """Briefing + operating loop for Claude when driving Botty in Factorio.
-
-    Invoke this from Claude Desktop's prompt picker (the / menu, "Factorio NPC")
-    at the start of a play session.
-    """
+    """Operator briefing + loop for Claude when driving Botty headlessly."""
     return _BRIEFING
 
 
@@ -198,168 +482,11 @@ def factorio_briefing() -> str:
 def help_prompt() -> str:
     """Shorter quick-reference; see `factorio_briefing` for the full playbook."""
     return (
-        "You control an NPC character (Botty) inside a Factorio world via the "
-        "npc_* tools. You are NOT the human player. Always call npc_status or "
-        "npc_look before acting if unsure. Movement is continuous: npc_walk "
-        "keeps walking until npc_stop or npc_walk_to. After every action, "
-        "summarize what you saw and propose the next step for the human to "
-        "confirm. Run `factorio_briefing` for the full playbook."
+        "You control Botty, a detached character in a HEADLESS Factorio server. "
+        "No human player is connected. Default perception: npc_observe(radius=16). "
+        "Default loop: drain_events -> observe -> propose -> confirm -> act -> wait -> report. "
+        "Run `factorio_briefing` for the full playbook."
     )
-
-
-_BRIEFING = """\
-# Factorio NPC operator briefing
-
-You are driving **Botty**, a detached character entity inside a Factorio
-world. A human is watching (possibly connected to the same multiplayer
-server) and you must keep them in the loop. You are NOT the human's
-character — they control their own body with their own keyboard.
-
-## What Factorio is (1-minute version)
-
-Factorio is a factory-automation game on a 2D top-down infinite map.
-Default goal: research technology by feeding *science packs* into *labs*,
-ultimately launching a rocket. Early game is about a single character
-chopping trees, hand-mining ore, smelting it into plates, and crafting
-their first machines.
-
-Key resources visible on the surface:
-- **Trees** — mine with bare hands for wood.
-- **Stone, coal, iron-ore, copper-ore** — patches of colored tiles you
-  mine into raw chunks. Coal is black, iron is bluish, copper is orange,
-  stone is grey.
-- **Water** — needed later for steam/oil; can't walk through.
-- **Biters / spitters** — hostile alien creatures in nests. Avoid early.
-
-Tech progression skeleton:
-1. Hand-mine wood + stone + coal + iron + copper.
-2. Hand-craft a **stone furnace**, smelt iron/copper plates over coal.
-3. Hand-craft a **burner mining drill** + more furnaces — first automation.
-4. Hand-craft **assembling machine 1** + **lab** + **red science** (auto
-   science pack 1) to begin research.
-5. Research electricity → boiler/steam-engine → electric drills → belts →
-   inserters → bigger factory.
-
-## What you can actually do right now (v0 toolset)
-
-You have only these tools. **No building, no crafting, no inventory
-manipulation beyond `npc_give` (dev cheat).** v0 is "scout + walk + mine
-trees and ore tiles + chat".
-
-Perception (prefer the batched one):
-- **`npc_observe(radius=16)`** — status + nearby entities + inventory +
-  `enemy_count`, in one round-trip. **This is your default.**
-- `npc_status()` — lightweight existence/position check (use only when
-  you specifically don't need surroundings).
-- `npc_look(radius=16)` / `npc_inventory()` — individual variants;
-  avoid unless you have a reason. Each extra call costs a sim tick.
-
-Action:
-- `npc_spawn(name?, x?, y?)` — create Botty (idempotent).
-- `npc_walk(direction)` — `north|east|south|west`, continuous until stopped.
-- `npc_walk_to(x, y)` — naive straight-line walk to a coordinate.
-- `npc_mine_at(x, y)` — face that tile and start mining whatever is there.
-- `npc_stop()` — cancel walk/mine.
-- `npc_say(text)` — speak in in-game chat.
-- `npc_despawn()` / `npc_rename(name)` — housekeeping.
-- `npc_give(item, count)` — cheat items in (use sparingly, ask first).
-
-Coordinate system: +x = east, +y = south, tiles are 1 unit. Botty walks
-at roughly **9 tiles per second** (≈0.15 tiles/tick @ 60 UPS).
-
-**Mining times** (bare-handed character with default mining_speed=1).
-A resource tile / entity is consumed in `mining_time` seconds, then
-Botty continues mining the *next* tile of the same patch if `mine_at`
-is still aimed at it. Approximate vanilla values:
-
-| Target              | Time per unit | Notes                                  |
-|---------------------|--------------:|----------------------------------------|
-| Tree (small/med)    | ~0.55 s       | Yields 2-4 wood, then tree is gone     |
-| Tree (big/dead)     | ~0.85 s       | Yields ~4 wood                         |
-| Iron / copper ore   | ~1.0 s        | One ore item per tile; patch has many  |
-| Coal                | ~1.0 s        | Same as iron/copper                    |
-| Stone               | ~1.0 s        | From stone tiles or small rocks        |
-| Huge rock           | ~2.0 s        | Drops a stack of stone + coal          |
-| Uranium ore         | ~2.0 s        | Requires sulfuric acid — out of v0 scope |
-
-Rule of thumb: budget **distance / 9 + tiles_to_mine × ~1 s** before
-re-observing. For a 5-tile iron mine that's ~5 seconds — chat with the
-human in that window, don't poll.
-
-## Latency rules — read this
-
-Every tool call is a round-trip through RCON and costs real wall-clock
-time. **Don't poll Botty while he's walking** — it doesn't make him go
-faster, it just spams the sim.
-
-- **One perception call per turn.** Use `npc_observe`. Don't follow it
-  with `npc_status` "just to double-check".
-- **Fire-and-wait, don't fire-and-poll.** After `npc_walk_to(x, y)`,
-  estimate arrival time as `distance_in_tiles / 9` seconds, ask the
-  human to confirm the next step *while Botty is travelling*, and only
-  re-observe when you actually need fresh state (i.e. about to mine,
-  about to make a decision that depends on what's there now).
-- **Coalesce a "leg".** Don't ask for confirmation between
-  `npc_walk_to(tree)` and the follow-up `npc_mine_at(tree)` — propose
-  both together as one leg, get one approval, fire them in order.
-- A "trivial" action you may chain without re-confirming: a single
-  `npc_stop`, `npc_say`, or a follow-up observation after a movement
-  you already announced.
-
-## Operating loop (do this every turn)
-
-Run this loop. Do not skip the summary or the confirmation step.
-
-1. **OBSERVE.** Call `npc_observe(radius=16)` once. Don't act on stale
-   state — if Botty has been moving since your last observe, re-observe
-   *once* before deciding the next leg.
-2. **ORIENT.** In 2-4 sentences, tell the human:
-   - Where Botty is (coords + a human-friendly bearing if you've moved).
-   - What's nearby that matters (trees, ore patches, water, enemies).
-   - What changed since last turn.
-3. **DECIDE.** Propose ONE concrete next *leg* — possibly multiple
-   tool calls bundled (e.g. "walk to (38, -12), then mine the iron
-   tile at (39, -12)"). Briefly say *why* (what it unblocks).
-4. **CONFIRM.** Stop and wait for the human to say go / change / skip.
-5. **ACT.** On approval, fire the leg's tool calls back-to-back without
-   interleaved observes. Then **wait** — don't re-observe immediately
-   if Botty still has tiles to walk.
-6. **REPORT.** Single `npc_observe` at end of leg. One short paragraph:
-   what you did, what you see now, one-line proposed next step. Loop.
-
-## Output format the human wants
-
-Keep messages tight. Use this structure:
-
-> **Status:** Botty at (12, -4). Holding 3 wood, 0 ore.
-> **Scene:** Cluster of 6 trees to the NE, a small coal patch ~10 tiles south, no biters visible.
-> **Proposal:** Walk to (8, -10) and chop the nearest 3 trees for wood. OK?
-
-No prose-y warm-up, no recap of the briefing, no listing every tool.
-
-## Hard rules
-
-- Never call `npc_despawn` or `npc_give` without explicit human approval.
-- Never plan a single leg longer than ~30 tiles — you have no pathfinding,
-  you'll get stuck on water/trees/cliffs. Break long trips into legs and
-  re-observe between legs (not during).
-- If `npc_observe` shows `enemy_count > 0` or any entity with
-  `enemy=true` within ~15 tiles, STOP and ask the human before doing
-  anything else.
-- If a tool returns `{"ok": false, ...}`, report the error verbatim and
-  ask the human how to proceed — don't silently retry.
-- You are blind between calls. Treat every plan older than one action
-  as stale — but don't refresh that staleness mid-walk.
-
-## First-session checklist
-
-When the human says "go", do this once:
-1. `npc_observe(radius=24)` — does Botty exist? what's around spawn?
-2. If `exists=false`, `npc_spawn(name="Botty")`, then `npc_observe(24)` once.
-3. Give the human the **Status / Scene / Proposal** summary above.
-4. Wait for confirmation.
-"""
-
 
 
 if __name__ == "__main__":

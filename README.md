@@ -64,27 +64,42 @@ optionally connect your Steam Factorio GUI to `127.0.0.1` to watch.
 
 ## Available MCP tools
 
-| Tool | Purpose |
-|---|---|
-| `npc_spawn(name?, dx?, dy?)` | Create the NPC near you. Idempotent. |
-| `npc_despawn()` | Remove it. |
-| `npc_rename(name)` | Update the floating nameplate. |
-| `npc_status()` | Exists? Where? Doing what? |
-| `npc_walk(direction)` | Continuous walk: `north` / `east` / `south` / `west`. |
-| `npc_walk_to(x, y)` | Naive straight-line walk to absolute coords. |
-| `npc_mine_at(x, y)` | Start mining whatever's at that position. |
-| `npc_stop()` | Cancel current intent. |
-| `npc_say(text)` | Chat as the NPC. |
-| `npc_look(radius=16)` | Perception: position + nearby entities. |
-| `npc_inventory()` | Main inventory contents. |
-| `npc_give(item, count, quality?)` | Dev helper: insert items directly. |
+The Factorio-side mod auto-spawns Botty on server boot, so you can start
+driving immediately. All tools below are implemented; see
+[mod/npc_mcp/PLAN.md](mod/npc_mcp/PLAN.md) for the in-game side.
+
+**Lifecycle:** `npc_spawn`, `npc_despawn`, `npc_rename`, `npc_save`
+
+**Perception:** `npc_observe(radius=16)` (default), `npc_status`,
+`npc_look`, `npc_look_at`, `npc_inventory`, `npc_drain_events`,
+`npc_screenshot`, `npc_chart`, `npc_map_summary`,
+`npc_research_status`, `npc_tech_tree`
+
+**Movement:** `npc_walk_to` (async A*-pathfinding),
+`npc_walk(direction)`, `npc_stop`
+
+**Gathering:** `npc_mine_at(x, y)` (auto-approaches into reach)
+
+**Crafting** (simulated hand-craft, no player required):
+`npc_craft(recipe, count)`, `npc_craft_status`, `npc_cancel_craft`
+
+**Building:** `npc_place(item, x, y, direction=0)`, `npc_pickup`,
+`npc_rotate`, `npc_set_recipe`
+
+**Logistics:** `npc_insert_into`, `npc_take_from`, `npc_fuel`
+
+**Research:** `npc_research(tech)`
+
+**Combat:** `npc_equip(armor, gun, ammo)`, `npc_shoot_at`
+
+**Chat / cheats:** `npc_say`, `npc_give`
 
 ## Known v0 limitations
 
-- `walk_to` is dumb straight-line stepping. Real pathfinding via `surface.request_path` is the obvious next step.
-- Mining requires the target to be within reach distance; no auto-approach yet.
-- No building/crafting tools yet.
 - Single NPC only (`storage.npc`). Multi-NPC would key on `unit_number`.
+- The simulated hand-craft queue uses `recipe.energy * 60` as crafting
+  ticks at speed 1.0; it does not honor `character_crafting_speed_modifier`.
+- Event channel is pull-only (`npc_drain_events`); no SSE stream yet.
 
 ## Relationship to `jerome3o/factorio-mcp`
 
