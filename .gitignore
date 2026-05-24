@@ -1,0 +1,19 @@
+# Reference repositories cloned locally for study (not part of this project)
+.reference/
+
+# Local Factorio dedicated-server data (saves, mods, config) — too big & per-user
+.factorio-server/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
