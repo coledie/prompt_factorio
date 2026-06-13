@@ -1,0 +1,6 @@
+{
+  "name": "factorio-npc",
+  "description": "Factorio NPC operator skill for the factorio-npc MCP server. Provides the per-turn loop, smart placement helpers, tile-exact layout schema notation, and verified burner-tier primitives for playing Factorio via the npc_* tool family.",
+  "version": "1.0.0",
+  "author": { "name": "coles" }
+}

@@ -1,0 +1,15 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "factorio-npc-local",
+  "description": "Local marketplace for the factorio-npc plugin (lives inside the prompt_factorio repo).",
+  "owner": { "name": "coles" },
+  "plugins": [
+    {
+      "name": "factorio-npc",
+      "description": "Factorio NPC operator skill for the factorio-npc MCP server. Use when the user asks to play Factorio, run a Botty/NPC turn, build a factory, mine ore, place drills/belts/inserters, or call any npc_* tool. Provides the per-turn loop, smart placement helpers, tile-exact layout schema notation, and verified burner-tier primitives.",
+      "author": { "name": "coles" },
+      "category": "gaming",
+      "source": "./.claude-plugin/plugins/factorio-npc"
+    }
+  ]
+}
