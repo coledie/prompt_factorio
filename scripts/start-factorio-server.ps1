@@ -15,7 +15,9 @@ param(
     [string]$SaveName    = 'npc-world',
     [int]$RconPort       = 27015,
     [string]$RconPassword,  # falls back to .env RCON_PASSWORD
-    [switch]$Fresh          # delete the existing save and regenerate
+    [switch]$Fresh,         # delete the existing save and regenerate
+    [switch]$ExactSave,     # load $SaveName.zip exactly; skip newest-save autodetect
+    [switch]$NoEnemies      # generate save with no biters / peaceful_mode (only on -Fresh or first-run)
 )
 
 $ErrorActionPreference = 'Stop'
@@ -132,11 +134,58 @@ if (-not $RconPassword) { throw "No RCON password (pass -RconPassword or set RCO
 if ($Fresh -and (Test-Path $savePath)) {
     Write-Host "Deleting existing save: $savePath"
     Remove-Item -LiteralPath $savePath -Force
+    # Also drop autosaves so we don't auto-load an older world via newest-save logic.
+    Get-ChildItem -LiteralPath $serverSaves -Filter '_autosave*.zip' -ErrorAction SilentlyContinue |
+        ForEach-Object { Write-Host "Deleting autosave: $($_.Name)"; Remove-Item -LiteralPath $_.FullName -Force }
 }
 if (-not (Test-Path $savePath)) {
-    Write-Host "Generating new save: $savePath"
-    & $FactorioExe --config $serverCfg --create $savePath
+    $createArgs = @('--config', $serverCfg, '--create', $savePath)
+    if ($NoEnemies) {
+        $mgs = Join-Path $serverRoot 'map-gen-settings.json'
+        $mgsContent = @'
+{
+  "peaceful_mode": true,
+  "autoplace_controls": {
+    "coal":        {"frequency": 1, "size": 1, "richness": 1},
+    "stone":       {"frequency": 1, "size": 1, "richness": 1},
+    "copper-ore":  {"frequency": 1, "size": 1, "richness": 1},
+    "iron-ore":    {"frequency": 1, "size": 1, "richness": 1},
+    "uranium-ore": {"frequency": 1, "size": 1, "richness": 1},
+    "crude-oil":   {"frequency": 1, "size": 1, "richness": 1},
+    "water":       {"frequency": 1, "size": 1},
+    "trees":       {"frequency": 1, "size": 1},
+    "enemy-base":  {"frequency": 0, "size": 0}
+  }
+}
+'@
+        Set-Content -LiteralPath $mgs -Value $mgsContent -Encoding UTF8 -NoNewline
+        $createArgs += @('--map-gen-settings', $mgs)
+        Write-Host "Generating new NO-ENEMIES save: $savePath"
+    } else {
+        Write-Host "Generating new save: $savePath"
+    }
+    & $FactorioExe @createArgs
     if ($LASTEXITCODE -ne 0) { throw "save generation failed ($LASTEXITCODE)" }
+}
+
+# --- pick newest save (unless -ExactSave or -Fresh) ---------------------------
+# Without this, restarting after autosaves silently rewinds to whatever
+# $SaveName.zip was on disk -- losing all gameplay since the named save was
+# last written. We prefer the newest .zip in saves/ and warn loudly if it
+# isn't $SaveName.zip.
+if (-not $ExactSave -and -not $Fresh) {
+    $newest = Get-ChildItem -LiteralPath $serverSaves -Filter *.zip |
+              Sort-Object LastWriteTime -Descending |
+              Select-Object -First 1
+    if ($newest -and $newest.FullName -ne $savePath) {
+        $saveAge   = (Get-Item $savePath).LastWriteTime
+        $newerBy   = [int]($newest.LastWriteTime - $saveAge).TotalSeconds
+        Write-Host ""
+        Write-Warning "Newer save detected: '$($newest.Name)' is $newerBy s newer than '$SaveName.zip'."
+        Write-Warning "Loading the newer save to avoid losing gameplay."
+        Write-Warning "Pass -ExactSave to override and load '$SaveName.zip' exactly."
+        $savePath = $newest.FullName
+    }
 }
 
 # --- launch -------------------------------------------------------------------
