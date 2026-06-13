@@ -56,18 +56,30 @@ Set:
 
 Installs `fastapi`, `uvicorn`, `mcrcon`, `python-dotenv`, `fastmcp`, `httpx`.
 
-### 1.3 (Optional) install the mod into your Steam Factorio GUI
+### 1.3 Install the mod into your Steam Factorio GUI
 
-Only needed if you want to *connect to the dedicated server as a player* and
-also have the mod show up in your singleplayer menu. The dedicated server
-gets its own mod folder automatically (see step 2), so this is optional.
+Required if you want to **connect to the dedicated server as a player**
+(see §2.5). `npc_mcp` is not on the mod portal, so Factorio's normal
+"sync mods with server" flow can't fetch it — the client needs its own
+copy with the exact same files. If you only ever drive Botty through
+Claude and never watch in-game, you can skip this step.
 
 ```powershell
-.\scripts\install-mod.ps1
+.\scripts\install-mod.ps1 -MatchServer
 ```
 
-Creates a directory junction `%APPDATA%\Factorio\mods\npc_mcp` → `mod\npc_mcp`.
-Then in Factorio: **Main menu → Mods → enable npc_mcp**.
+This:
+1. Junctions `%APPDATA%\Factorio\mods\npc_mcp` → `mod\npc_mcp` (same source
+   the server uses, so checksums match automatically).
+2. Adds/enables `npc_mcp` in `%APPDATA%\Factorio\mods\mod-list.json`.
+3. With `-MatchServer`: disables `space-age`, `quality`, and `elevated-rails`
+   on the client. The server only loads `base + npc_mcp`, and Factorio
+   refuses to multiplayer-join unless the enabled mod sets match exactly.
+   Omit `-MatchServer` if you also play singleplayer with those DLCs and
+   prefer to toggle them in the Mods menu yourself.
+
+Re-run with `-Force` after pulling mod updates to refresh the junction.
+Fully quit and relaunch Factorio so it picks up the change.
 
 ### 1.4 Register the MCP server in Claude Desktop
 
@@ -189,6 +201,15 @@ The MCP server ships two **prompts** (Claude Desktop surfaces them in the
    **`factorio_briefing`** → Submit.
 3. Then say "go" (or "Botty, start the first-session checklist").
 
+> ⚠️ **If you forget step 2, gameplay will be poor.** Claude Desktop
+> does not auto-discover the briefing — without it the model will skip
+> the schema-first planning step and produce broken layouts (drills on
+> patch edges, belts dead-ending at chests with no inserter, drop tiles
+> off by one). If you notice this mid-session, tell Claude verbatim:
+> *"Read the `factorio_briefing` MCP prompt and `docs/FACTORY_SCHEMA.md`,
+> then restart the turn."* Re-attaching the prompt via the `+` menu
+> works too.
+
 Claude will run `npc_status` / `npc_look`, summarize the scene, and
 propose its next move for you to confirm. Repeat. You stay in the loop
 on every non-trivial action.
@@ -198,10 +219,28 @@ reopen Claude Desktop so it re-reads the MCP server's prompts.
 
 ### 2.5 (Optional) Watch in-game
 
+Prereq: you ran `.\scripts\install-mod.ps1` once (§1.3) so your GUI client
+has `npc_mcp` installed and enabled with the same checksum as the server.
+
 Launch Factorio normally through Steam → **Multiplayer → Connect to address
 → `127.0.0.1`**. You'll see Botty walking around, controlled by Claude.
 Your WASD keys still drive only your own character — Botty is a separate
 detached character entity.
+
+**If connect fails with a mod mismatch:** the server only loads `base +
+npc_mcp`, but a vanilla Steam install also has `space-age`, `quality`, and
+`elevated-rails` enabled. Re-run `.\scripts\install-mod.ps1 -MatchServer`
+to disable them on the client, then fully quit and relaunch Factorio.
+
+**Spectator follow-cam (optional).** Once connected, you can fly around
+freely instead of controlling your spawned character:
+
+```
+/c game.player.spectator = true        -- no collisions, ignored by biters
+/c game.player.character = nil         -- detach: pan with arrow keys / mouse
+```
+
+Re-attach later with `/c game.player.create_character()`.
 
 ---
 

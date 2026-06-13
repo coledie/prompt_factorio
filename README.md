@@ -62,6 +62,17 @@ Short version, once you've done the one-time setup:
 Then drive Botty from Claude using the `factorio-npc` MCP tools, and
 optionally connect your Steam Factorio GUI to `127.0.0.1` to watch.
 
+> ⚠️ **Tell Claude Desktop to read the briefing first.** Claude Desktop
+> does **not** auto-load this repo's `CLAUDE.md` / `AGENTS.md` skill or
+> the MCP's `factorio_briefing` prompt. If you skip this, Claude will
+> place drills on patch edges, point belts at chests with no inserter,
+> and miscompute drop tiles — gameplay will be poor. At the start of
+> every session either (a) attach the `factorio_briefing` prompt via
+> the `+` menu → *Add from factorio-npc* (see [SETUP.md](SETUP.md#giving-claude-a-factorio-playbook)),
+> or (b) explicitly tell Claude: *"Read the `factorio_briefing` MCP
+> prompt and `docs/FACTORY_SCHEMA.md` before doing anything."* If a
+> session starts misbehaving, ask Claude to re-read the briefing.
+
 ## Available MCP tools
 
 The Factorio-side mod auto-spawns Botty on server boot, so you can start
