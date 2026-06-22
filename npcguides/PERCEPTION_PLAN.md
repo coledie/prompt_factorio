@@ -1,5 +1,11 @@
 # Perception hardship — root causes and a plan
 
+> **Status: design doc / root-cause analysis (historical).** This
+> records why early perception failed and the plan to fix it. Phase 1–2
+> (`npc_find`, `npc_text_map`) have since shipped in
+> [../mcp/factorio_npc_mcp.py](../mcp/factorio_npc_mcp.py). Kept for
+> context, not as operating instructions.
+
 ## What just happened
 
 Botty was trying to find a stone patch. The sequence Claude actually ran:

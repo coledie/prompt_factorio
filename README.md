@@ -23,28 +23,27 @@ Not yet validated against a live Factorio install — see "Bring-up & validation
 mod/npc_mcp/        Factorio mod (control.lua, info.json) — junctioned into Factorio mods dir
 backend/            FastAPI HTTP proxy around RCON (X-API-Key auth)
 mcp/                FastMCP server exposing npc_* tools to the LLM
-scripts/            PowerShell helpers: install-mod, install-deps, start-backend, start-mcp
+scripts/            PowerShell helpers: install-mod, install-deps, start-backend, start-mcp, sync-skill
+npcguides/          NPC reference + design guides (see npcguides/README.md for the index)
+CLAUDE.md           Operator skill — single source of truth (mirrored by scripts/sync-skill.ps1)
+AGENTS.md           Generated copy of CLAUDE.md for Codex/OpenAI agent discovery
 .env.example        Copy to .env and fill in
 .reference/         (gitignored) cloned upstream repos for study
 ```
 
+> The operator playbook is maintained in `CLAUDE.md` and mirrored to
+> `AGENTS.md`, `.claude/skills/factorio-npc/SKILL.md`, and the
+> `.claude-plugin/.../SKILL.md` so each agent runtime can discover it.
+> Edit `CLAUDE.md`, then run `scripts/sync-skill.ps1` to keep them in
+> sync (`-Check` verifies without writing).
+
 ## Architecture
 
-```mermaid
-flowchart LR
-    LLM[LLM] --> MCP[MCP server]
-    MCP -->|HTTP + X-API-Key| Backend[FastAPI backend]
-    Backend -->|RCON 27015| Factorio
-    subgraph Factorio
-      Mod[npc_mcp mod\non_tick + remote interface] --> NPC[detached character entity]
-      You[your player\ngame.players 1] -. untouched .-> NPC
-    end
-```
-
-Your keyboard always drives `game.players[1]`. The NPC is a separate
-`character` entity created with `surface.create_entity{name="character", ...}`
-and is **not attached to any LuaPlayer**, so it cannot conflict with your
-input or window focus. No synthetic keypresses are ever sent.
+`factorio_npc_mcp` chains **LLM → MCP server → FastAPI backend → RCON →
+Factorio mod**, where the mod drives a detached `character` entity that
+never touches your own player. See
+**[npcguides/ARCHITECTURE.md](npcguides/ARCHITECTURE.md)** for the full
+diagram and layer-by-layer breakdown.
 
 ## Bring-up & validation
 
@@ -70,7 +69,7 @@ optionally connect your Steam Factorio GUI to `127.0.0.1` to watch.
 > every session either (a) attach the `factorio_briefing` prompt via
 > the `+` menu → *Add from factorio-npc* (see [SETUP.md](SETUP.md#giving-claude-a-factorio-playbook)),
 > or (b) explicitly tell Claude: *"Read the `factorio_briefing` MCP
-> prompt and `docs/FACTORY_SCHEMA.md` before doing anything."* If a
+> prompt and the `npc_schema` tool before doing anything."* If a
 > session starts misbehaving, ask Claude to re-read the briefing.
 
 ## Available MCP tools

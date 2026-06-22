@@ -7,7 +7,7 @@ description: Operator playbook for driving an NPC character on the headless Fact
 
 You drive ONE named character on a headless Factorio 2.0.76 Space Age
 dedicated server through the `factorio-npc` MCP server. Multiple AI
-agents may share the same world â€” always pass `npc_name` on every call.
+agents may share the same world — always pass `npc_name` on every call.
 
 ## When this skill applies
 - Any `npc_*` tool is about to be called.
@@ -22,38 +22,38 @@ agents may share the same world â€” always pass `npc_name` on every call.
    events + craft queue in a single round-trip.
 
 ## The core loop (per turn)
-1. **One** `npc_turn(npc_name, 16)` call â€” never call observe/status/
+1. **One** `npc_turn(npc_name, 16)` call — never call observe/status/
    drain_events/craft_status separately; `npc_turn` already includes them.
-2. Decide. **If you are about to place â‰¥2 entities, you MUST emit a
+2. Decide. **If you are about to place ≥2 entities, you MUST emit a
    schema diagram first** (see "Mandatory schema-first planning" below).
 3. Execute. Bundle 2+ world-mutating ops into one `npc_batch` so they
    run in a single Factorio tick and a single LLM round-trip.
 4. For long actions (walking, mining, crafting), estimate ETA then call
    `npc_turn` when you expect it to be done. Don't poll faster than
-   ~1Ã—/sec of in-game time.
+   ~1×/sec of in-game time.
 5. Stop only if: blocked, a hard rule says so, or you're about to do
    something destructive (`npc_despawn`, `npc_give`, attacking a non-enemy).
 
 ## Mandatory schema-first planning (READ THIS BEFORE EVERY BUILD)
-The three most common LLM bugs in this domain â€” drill on patch edge,
-drop tile off by one, belt feeding chest with no inserter â€” all come
+The three most common LLM bugs in this domain — drill on patch edge,
+drop tile off by one, belt feeding chest with no inserter — all come
 from skipping the schema step. Before EVERY `npc_batch` that places 2+
 entities, your reply MUST contain, IN THIS ORDER:
 
 1. **A tile-coord grid diagram** using the glyph set:
    - `*c` coal, `*i` iron, `*u` copper, `*s` stone
-   - `d1c`, `d2c`, `d1i`â€¦ drills (id + resource); fills 2Ã—2 body
+   - `d1c`, `d2c`, `d1i`… drills (id + resource); fills 2×2 body
    - `B>c`, `B<c`, `B^c`, `Bvc` belts (arrow = flow, suffix = content)
    - `ix` extractor inserter (pulls off entity body)
    - `iL` loader inserter (drops onto chest/furnace/assembler)
    - `Ch` chest, `Fu` furnace, `As` assembler, `..` empty ground
    Label rows/cols with absolute tile coords.
-2. **Facing + drop-tile annotations** â€” one line per drill and inserter
+2. **Facing + drop-tile annotations** — one line per drill and inserter
    stating `(x, y)` body center, facing letter, computed drop tile
    (and pickup tile for inserters). Verify drop tiles against the drill
    table; verify inserter pickup/drop against the inserter table.
 3. **The validation checklist, line by line** ("1. footprints don't
-   overlap: âœ“â€¦ 4. every beltâ†’container junction has an inserter: âœ“â€¦").
+   overlap: ✓… 4. every belt→container junction has an inserter: ✓…").
 4. ONLY THEN call `npc_batch`.
 
 Replies that skip the diagram or the validation walkthrough will be
@@ -78,7 +78,7 @@ Directions 0=N, 4=E, 8=S, 12=W (16-direction enum; cardinals only).
   call `npc_look_at` with large radius to enumerate ore tiles.
 
 ## Finding and mining ore
-Prefer `npc_find(resource)` â€” returns clustered patches with `nearest_tile`,
+Prefer `npc_find(resource)` — returns clustered patches with `nearest_tile`,
 `bbox`, and `count`. Verify with `npc_look_at(x, y, radius=2)` before mining.
 
 ## Burner fuel
@@ -86,33 +86,33 @@ Burner inserters / drills / furnaces all need coal in their fuel slot.
 After placing each one, call `npc_fuel(npc_name, x, y, "coal", 2)`.
 
 ## Smart placement helpers (prefer over raw `npc_place`)
-- `npc_belt(from, to, item)` â€” straight axis-aligned belt run, direction auto.
+- `npc_belt(from, to, item)` — straight axis-aligned belt run, direction auto.
   Use TWO calls for L-corners (first leg, then second leg).
-- `npc_inserter(pickup, drop, variant)` â€” places one inserter with the
+- `npc_inserter(pickup, drop, variant)` — places one inserter with the
   correct facing computed for you.
-- `npc_place(item, x, y, dir)` â€” single placement, auto-walks into reach.
+- `npc_place(item, x, y, dir)` — single placement, auto-walks into reach.
   Async; result arrives as `placed` / `place_failed` events next turn.
 - Errors are structured: check `error.code` for `missing_item`,
   `tile_blocked` (with `blockers` + `suggestion`), `not_placeable`,
   `engine_refused`, `walk_stuck`.
 
-## Drill placement â€” three rules to never break
+## Drill placement — three rules to never break
 
-### Rule A â€” same resource only
-A burner/electric drill has a 3Ã—3 mining footprint. It mines ANY ore in
+### Rule A — same resource only
+A burner/electric drill has a 3×3 mining footprint. It mines ANY ore in
 that footprint, so straddling iron+coal produces a jammed mixed-ore belt.
 Before placing: `npc_look_at(x, y, radius=2)` and confirm every tile
-within Â±1 carries the same resource name.
+within ±1 carries the same resource name.
 
-### Rule B â€” DENSE CENTER of the patch, not the edge
+### Rule B — DENSE CENTER of the patch, not the edge
 `npc_find.nearest_tile` returns the tile **closest to the bot**, almost
 always on the patch edge. A drill on the edge has half its footprint on
 empty ground and depletes much faster. Walk INTO the patch toward `bbox`
 center, then `npc_look_at(candidate, radius=2)` to confirm ALL FOUR
-tiles of a 2Ã—2 burner-drill body (or all 9 of an electric drill) sit on
+tiles of a 2×2 burner-drill body (or all 9 of an electric drill) sit on
 ore with non-trivial `amount`.
 
-### Rule C â€” drop tile MUST land on a real target
+### Rule C — drop tile MUST land on a real target
 Compute the drop tile from the drill's facing (table below). It MUST
 equal exactly one of: (a) a belt tile you are also placing this batch,
 (b) the body of a partner burner entity that accepts the mined item as
@@ -125,12 +125,12 @@ items into it.** Items pile on the last belt tile and back-pressure the
 line. You MUST place an inserter between the belt and the container.
 The only thing a belt can pour into directly is another belt or an
 underground-belt entry. This is the single most common LLM planning
-mistake â€” every belt that terminates anywhere except another belt needs
+mistake — every belt that terminates anywhere except another belt needs
 a loader inserter at its end.
 
 ## Tile-exact geometry reference
 
-**Drill drop-tile table** (2Ã—2 body, center `(cx, cy)` snaps to integer):
+**Drill drop-tile table** (2×2 body, center `(cx, cy)` snaps to integer):
 
 | facing | dir | drop tile |
 |---|---:|---|
@@ -141,7 +141,7 @@ a loader inserter at its end.
 
 **Inserter pickup/drop** (range 1; offsets from body tile; +x=east, +y=south).
 **WARNING:** in this MCP, `direction` of an inserter is the side its
-**pickup tile** is on â€” inverted from Factorio's engine convention.
+**pickup tile** is on — inverted from Factorio's engine convention.
 Prefer `npc_inserter(pickup, drop)` which derives direction for you.
 
 | direction | pickup offset | drop offset |
@@ -151,24 +151,24 @@ Prefer `npc_inserter(pickup, drop)` which derives direction for you.
 | 8  (pickup-from-S) | `(0, +1)` | `(0, -1)` |
 | 12 (pickup-from-W) | `(-1, 0)` | `(+1, 0)` |
 
-Worked example: body at `(-7.5, -70.5)` placed `direction=8` â†’
+Worked example: body at `(-7.5, -70.5)` placed `direction=8` →
 pickup=`(-7.5, -69.5)`, drop=`(-7.5, -71.5)`.
 
-## Verified primitive: self-feeding coal pair â†’ belt â†’ loader â†’ chest
+## Verified primitive: self-feeding coal pair → belt → loader → chest
 
 ```
-   ..  *c  d1c d1c  ixâ†’ B>c B>c B>c B>c B>c iLâ† Ch
-   ..  *c  d1c d1c  *c    d1 faces S, drop=(2,2) INSIDE d2 body â†’ d2.fuel
-   ..  *c  d2c d2c  *c    d2 faces N, drop=(1,1) INSIDE d1 body â†’ d1.fuel
-   ..  *c  d2c d2c  *c    ix faces E, picks coal from d1.fuel â†’ belt
-                          iL faces W, picks coal off last belt tile â†’ Ch
+   ..  *c  d1c d1c  ix→ B>c B>c B>c B>c B>c iL← Ch
+   ..  *c  d1c d1c  *c    d1 faces S, drop=(2,2) INSIDE d2 body → d2.fuel
+   ..  *c  d2c d2c  *c    d2 faces N, drop=(1,1) INSIDE d1 body → d1.fuel
+   ..  *c  d2c d2c  *c    ix faces E, picks coal from d1.fuel → belt
+                          iL faces W, picks coal off last belt tile → Ch
 ```
 
 Self-feeding mechanic: a burner drill's `drop_position` lands INSIDE
-the partner drill's 2Ã—2 body. The game inserts the mined coal directly
+the partner drill's 2×2 body. The game inserts the mined coal directly
 into the partner's fuel inventory (coal is valid fuel for that entity).
 An inserter whose pickup tile sits on a burner-drill body reads from
-that drill's fuel slot â€” so `ix` drains d1's stockpile onto a belt
+that drill's fuel slot — so `ix` drains d1's stockpile onto a belt
 while d2's drops keep refilling d1.
 
 ```jsonc
@@ -195,7 +195,7 @@ extractor inserter is unloading it.
    body has a non-trivial `amount` (no edge placement).
 3. Every drill drop tile lands on: a partner drill body, a belt tile
    you placed, or a chest you placed at exactly that tile.
-4. Every belt â†’ chest / belt â†’ furnace / belt â†’ assembler junction has
+4. Every belt → chest / belt → furnace / belt → assembler junction has
    an inserter between them.
 5. Every inserter pickup tile is a real source (belt-end, chest, or
    burner body).
@@ -222,6 +222,9 @@ extractor inserter is unloading it.
 
 ## Full reference
 The complete tile-exact schema notation, all verified primitives, and
-extended composition rules live in the workspace at
-`docs/FACTORY_SCHEMA.md`. The MCP prompt `factorio_briefing` returns
-the same operator briefing this skill summarizes.
+extended composition rules live in `npcguides/FACTORY_SCHEMA.md`. Claude
+Desktop (and any MCP client) can pull it on demand without filesystem
+access via the `npc_schema` tool (or the `factorio_schema` prompt). The
+`npc_help` tool / `factorio_briefing` prompt return the same operator
+briefing this skill summarizes. The full `npcguides/` collection also
+covers multi-NPC binding, save management, and design notes.

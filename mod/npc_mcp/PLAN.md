@@ -1,5 +1,9 @@
 # `npc_mcp` mod — implementation plan
 
+> **Status: implementation plan / design reference.** The behaviour
+> described here is implemented in [control.lua](control.lua); this file
+> is the design rationale, not a TODO list.
+
 This mod is the Factorio-side half of the agent. It owns persistent state,
 runs the per-tick dispatcher, and exposes a single RCON-callable remote
 interface (`remote.call("npc", fn, ...)`). The MCP server emits raw Lua

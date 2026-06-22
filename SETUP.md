@@ -206,7 +206,7 @@ The MCP server ships two **prompts** (Claude Desktop surfaces them in the
 > the schema-first planning step and produce broken layouts (drills on
 > patch edges, belts dead-ending at chests with no inserter, drop tiles
 > off by one). If you notice this mid-session, tell Claude verbatim:
-> *"Read the `factorio_briefing` MCP prompt and `docs/FACTORY_SCHEMA.md`,
+> *"Read the `factorio_briefing` MCP prompt and the `npc_schema` tool,
 > then restart the turn."* Re-attaching the prompt via the `+` menu
 > works too.
 
@@ -342,7 +342,11 @@ factorio_npc_mcp/
 │  ├─ start-backend.ps1
 │  ├─ start-mcp.ps1            ← only for standalone MCP testing; Claude launches it itself
 │  ├─ register-claude.ps1      ← adds factorio-npc to Claude Desktop config
-│  └─ _register_claude.py      ← JSON-editing helper invoked by register-claude.ps1
+│  ├─ inspect-save.ps1         ← introspect a save file (see npcguides/SAVES.md)
+│  ├─ sync-skill.ps1           ← mirror CLAUDE.md to the other skill copies
+│  ├─ _register_claude.py      ← JSON-editing helper invoked by register-claude.ps1
+│  ├─ _register_factorio_plugin.py ← manual one-off: register plugin globally (optional)
+│  └─ _bench.py                ← manual dev utility: RCON latency benchmark (optional)
 ├─ .factorio-server/           ← gitignored: dedicated server's data dir
 ├─ .env.example
 ├─ .env                        ← gitignored: your secrets

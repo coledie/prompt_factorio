@@ -67,7 +67,7 @@ This is the single most important rule in this briefing. Layout bugs
 inserter) come from skipping this step. Before EVERY `npc_batch` that
 places 2 or more entities, your reply text MUST contain, in order:
 
-1. **A tile grid diagram** in the notation from `docs/FACTORY_SCHEMA.md`
+1. **A tile grid diagram** in the notation from `npcguides/FACTORY_SCHEMA.md`
    (glyphs: `*c` coal, `*i` iron, `d1c` `d2c` `d1i`... drills with id
    and resource, `B>c` `B<c` `B^c` `Bvc` belts with flow+content, `ix`
    extractor inserter, `iL` loader inserter, `Ch` chest, `Fu` furnace,
@@ -169,7 +169,8 @@ output tile) lands where your belt or chest sits.
 
 ## Layout schema (notation + verified primitives)
 Use the tile-exact schema notation when planning multi-entity layouts.
-Full reference: `docs/FACTORY_SCHEMA.md`. Critical rules in-line:
+Full reference: `npcguides/FACTORY_SCHEMA.md` (or the `npc_schema` tool).
+Critical rules in-line:
 
 **Drill drop-tile table** (2×2 body, center = `(cx, cy)` snaps to integer):
 - facing N (dir=0):  drop tile = `(cx-1, cy-2)`
@@ -315,6 +316,22 @@ def _load_skill_briefing() -> str:
 
 
 _BRIEFING = _load_skill_briefing()
+
+
+# Guides live in npcguides/. Loading them here lets the MCP serve their
+# contents to clients (like Claude Desktop) that have no filesystem access
+# to the repo, so the full reference is always one tool call away.
+def _load_guide(filename: str) -> str:
+    here = os.path.dirname(os.path.abspath(__file__))
+    path = os.path.join(here, "..", "npcguides", filename)
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return fh.read()
+    except OSError:
+        return f"(guide {filename} not found in npcguides/)"
+
+
+_FACTORY_SCHEMA = _load_guide("FACTORY_SCHEMA.md")
 
 mcp = FastMCP("Factorio NPC", dependencies=["httpx"], instructions=_BRIEFING)
 
@@ -1133,6 +1150,22 @@ def npc_help() -> str:
 def factorio_briefing() -> str:
     """Full operator briefing (same content as the `npc_help` tool)."""
     return _BRIEFING
+
+
+@mcp.tool()
+def npc_schema() -> str:
+    """Full tile-exact factory layout reference (npcguides/FACTORY_SCHEMA.md):
+    complete schema glyph notation, entity footprints, drill drop-tile geometry,
+    inserter pickup/drop tables, and verified multi-entity primitives. This is
+    the full version of the summary in `npc_help`; read it before planning any
+    multi-entity build."""
+    return _FACTORY_SCHEMA
+
+
+@mcp.prompt()
+def factorio_schema() -> str:
+    """Full factory layout schema reference (npcguides/FACTORY_SCHEMA.md)."""
+    return _FACTORY_SCHEMA
 
 
 @mcp.prompt()

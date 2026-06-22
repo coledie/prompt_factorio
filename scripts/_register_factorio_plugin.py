@@ -1,4 +1,16 @@
-"""Register the factorio-npc plugin in the local Claude Code marketplace registry."""
+"""Register the factorio-npc plugin in the GLOBAL Claude Code marketplace.
+
+One-time manual helper, not invoked by any script or documented setup step.
+It edits the user-wide registry at
+~/.claude/plugins/marketplaces/claude-plugins-official/.claude-plugin/marketplace.json
+(backing it up first) so `factorio-npc` is installable from any project.
+
+This is separate from the repo-local .claude-plugin/marketplace.json, which
+is what Claude Desktop discovers when this folder is opened directly. Only
+run this if you want the plugin available globally:
+
+    python scripts/_register_factorio_plugin.py
+"""
 import json
 import os
 import shutil

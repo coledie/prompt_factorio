@@ -222,6 +222,9 @@ extractor inserter is unloading it.
 
 ## Full reference
 The complete tile-exact schema notation, all verified primitives, and
-extended composition rules live in the workspace at
-`docs/FACTORY_SCHEMA.md`. The MCP prompt `factorio_briefing` returns
-the same operator briefing this skill summarizes.
+extended composition rules live in `npcguides/FACTORY_SCHEMA.md`. Claude
+Desktop (and any MCP client) can pull it on demand without filesystem
+access via the `npc_schema` tool (or the `factorio_schema` prompt). The
+`npc_help` tool / `factorio_briefing` prompt return the same operator
+briefing this skill summarizes. The full `npcguides/` collection also
+covers multi-NPC binding, save management, and design notes.

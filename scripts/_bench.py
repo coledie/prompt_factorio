@@ -1,3 +1,14 @@
+"""Manual RCON latency benchmark (dev utility, not part of normal setup).
+
+Not invoked by any script or documented flow. Run it by hand to compare
+fresh-connect vs. persistent RCON connections and measure `npc_observe` /
+`npc_status` round-trip times against a running server.
+
+Uses `/sc` console commands, so the server must allow them. Requires the
+RCON password in the RCON_PW environment variable:
+
+    $env:RCON_PW = "<password>"; python scripts/_bench.py
+"""
 import os, time
 from mcrcon import MCRcon
 pw = os.environ['RCON_PW']
